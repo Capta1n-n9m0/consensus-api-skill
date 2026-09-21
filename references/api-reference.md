@@ -188,6 +188,15 @@ Every plan can use every search filter — quality comes from filters, which cos
 
 Verified against the live endpoint, and not all of it is in the published docs:
 
+- **`study_types` must be a repeated parameter, not a comma-joined value.**
+  `?study_types=rct&study_types=meta-analysis` works;
+  `?study_types=rct,meta-analysis` returns `422` with
+  `loc: ["query","study_types",0]`, because the whole string is read as one enum
+  member. A single value works either way, which is what makes this easy to miss —
+  and the filter-ladder example in the published best-practices page appears to show
+  the comma form. Every other multi-value filter (`domain`, `country`,
+  `publisher_name`) genuinely *is* a comma-separated string. `consensus.py` sends
+  lists as repeated keys.
 - **Absent, not null.** Optional fields are omitted from the JSON entirely rather than
   returned as `null`. Read every optional field with `.get()`; `paper["sample_size"]` will
   raise on most papers. `next_page` is likewise absent when `is_end` is true.

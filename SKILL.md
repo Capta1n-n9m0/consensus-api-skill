@@ -38,6 +38,7 @@ python consensus.py plan
 | `ladder` | Re-runs the query adding one filter at a time, with counts | Results are too many, too few, or suspiciously empty    |
 | `sweep`  | Paginates one query to exhaustion                          | You need every record, not the first page               |
 | `fanout` | Many queries, sequential, merged and deduplicated on DOI   | Any real research question — this is the default        |
+| `batch`  | A plan of topic-grouped queries into a folder tree on disk | Many queries whose results must stay browsable and reusable |
 | `diff`   | Reports only papers absent from a stored state file        | Monitoring a topic across runs, on a schedule           |
 
 Every command takes the same filters (`--year-min`, `--study-types`, `--human`,
@@ -58,6 +59,25 @@ itself as central rather than incidental.
 python consensus.py fanout -f queries.txt --human --year-min 2020 \
   --page-size 50 -o corpus.json --audit audit.md
 ```
+
+**Write the plan to disk when there are more than a handful of queries.** `fanout`
+returns one merged corpus, which is right for answering a question now. `batch` instead
+keeps every query's results in its own folder beside the exact query and filters that
+produced them — which is what makes a review reproducible weeks later, when the merged
+corpus can no longer tell you which search found what.
+
+```bash
+python consensus.py batch -f plan.txt -o searches --dry-run   # check the tree, spend nothing
+python consensus.py batch -f plan.txt -o searches --page-size 50
+```
+
+The plan file groups queries by topic; `consensus.py batch --help` prints the format and
+the resulting tree. Two habits worth keeping: run `--dry-run` first, since it prints the
+folder layout and the call estimate without sending anything and catches a mistyped filter
+at its line number, and rerun with `--resume` after any interruption — it reuses the
+results already on disk rather than re-spending those calls. Each group gets a `corpus.json`
+deduplicated across its own queries, and `index.md` at both levels, so the tree is
+browsable without reading any JSON.
 
 **Climb the filter ladder instead of guessing.** Most disappointing result sets are an
 unfiltered query and most empty ones are four filters applied at once. `ladder` runs the

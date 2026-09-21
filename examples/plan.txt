@@ -1,0 +1,28 @@
+# A batch plan: queries grouped by topic.
+#
+#   consensus.py batch -f plan.txt -o searches --dry-run    # check the tree first
+#   consensus.py batch -f plan.txt -o searches --page-size 50
+#   consensus.py batch -f plan.txt -o searches --resume     # after an interruption
+#
+# `@filters` before any group applies to every group; inside a group it applies to
+# that group and overrides the global one. `::` gives a query a short folder name --
+# worth using when the query is long, since the folder name is otherwise the
+# truncated query and long paths are a real constraint on Windows.
+
+@filters year_min=2015 human=true
+
+[Strength and function]
+resistance training older adults muscle strength
+progressive overload sarcopenia intervention :: progressive overload
+protein supplementation with resistance training elderly :: protein co-supplementation
+
+[Evidence syntheses]
+# One good review pre-digests dozens of primary studies, so these pull above their weight.
+@filters study_types=systematic review,meta-analysis
+resistance training sarcopenia
+strength training older adults functional outcomes
+
+[Historical framing]
+# Era-gated: the terms the field used before the current ones.
+@filters year_max=2010
+weight lifting elderly frailty

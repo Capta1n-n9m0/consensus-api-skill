@@ -17,6 +17,7 @@ import csv
 import json
 import math
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -62,6 +63,26 @@ FILTER_PARAMS = [
     "publisher_name", "domain", "country", "journal_name", "clinical_guideline",
     "medical_mode",
 ]
+
+BOOL_PARAMS = {
+    "human", "controlled", "exclude_preprints", "open_access",
+    "clinical_guideline", "medical_mode", "include_full_text_chunks",
+    "include_semantic_score",
+}
+
+INT_PARAMS = {
+    "year_min", "year_max", "month_min", "month_max", "sample_size_min",
+    "sjr_min", "sjr_max", "citation_min", "duration_min", "duration_max",
+    "page", "page_size",
+}
+
+ALL_PARAMS = set(FILTER_PARAMS) | INT_PARAMS | BOOL_PARAMS
+
+# Names Windows refuses as a path component, whatever the extension. A query or
+# group called "Nul" would otherwise produce a folder that silently isn't one.
+WINDOWS_RESERVED = {"con", "prn", "aux", "nul", "clock$"} | {
+    "%s%d" % (stem, i) for stem in ("com", "lpt") for i in range(1, 10)
+}
 
 
 class ConsensusError(RuntimeError):
@@ -180,7 +201,12 @@ class Client:
             if isinstance(value, bool):
                 params[key] = "true" if value else "false"
             elif isinstance(value, (list, tuple)):
-                params[key] = ",".join(str(v) for v in value)
+                # study_types is a real array parameter, so it must go out as a
+                # repeated key (?study_types=rct&study_types=meta-analysis) and
+                # urlencode(doseq=True) does that from a list. Comma-joining it
+                # instead -- which the published docs example appears to show --
+                # is rejected with 422 on more than one value.
+                params[key] = list(value)
             else:
                 params[key] = value
 
@@ -311,6 +337,165 @@ class Client:
             "papers": papers,
             "audit": self.audit,
         }
+
+
+# -- batch plans ----------------------------------------------------------
+
+# Matches `key = value` runs in a @filters directive, allowing spaces inside the
+# value -- study types like "systematic review" would break a naive split.
+_FILTER_DIRECTIVE = re.compile(r"([A-Za-z_]\w*)\s*=\s*(.*?)(?=\s+[A-Za-z_]\w*\s*=|$)")
+
+MAX_PATH_HINT = 240  # Windows MAX_PATH is 260 unless long paths are enabled
+
+
+def safe_name(text, limit=50):
+    """Turn arbitrary query text into one portable path component.
+
+    Truncation happens at a word boundary so the folder still reads as words, and
+    the Windows-hostile cases -- illegal characters, trailing dots, reserved device
+    names -- are handled here rather than surfacing as a confusing IO error later.
+    """
+    text = re.sub(r"\s+", " ", (text or "").strip())
+    text = re.sub(r'[<>:"/\\|?*]', "", text)
+    text = "".join(ch for ch in text if ord(ch) >= 32)
+    if len(text) > limit:
+        head = text[:limit].rsplit(" ", 1)[0]
+        text = (head or text[:limit]).strip()
+    text = text.rstrip(". ")
+    if not text:
+        return "unnamed"
+    if text.lower() in WINDOWS_RESERVED:
+        return text + "_"
+    return text
+
+
+def _coerce_filter(key, value, where):
+    if key not in ALL_PARAMS:
+        sys.exit("%s: unknown filter '%s'\nvalid: %s"
+                 % (where, key, ", ".join(sorted(ALL_PARAMS))))
+    value = value.strip()
+    if key == "study_types":
+        types = [s.strip() for s in value.split(",") if s.strip()]
+        unknown = [s for s in types if s not in STUDY_TYPES]
+        if unknown:
+            sys.exit("%s: unknown study type(s) %s\nvalid: %s"
+                     % (where, unknown, ", ".join(STUDY_TYPES)))
+        return types
+    if key in BOOL_PARAMS:
+        if value.lower() in ("true", "yes", "1", ""):
+            return True
+        if value.lower() in ("false", "no", "0"):
+            return False
+        sys.exit("%s: %s expects true or false, got '%s'" % (where, key, value))
+    if key in INT_PARAMS:
+        try:
+            return int(value)
+        except ValueError:
+            sys.exit("%s: %s expects a number, got '%s'" % (where, key, value))
+    return value
+
+
+def _parse_directive(text, where):
+    out = {}
+    for key, value in _FILTER_DIRECTIVE.findall(text):
+        out[key] = _coerce_filter(key, value, where)
+    if not out and text.strip():
+        sys.exit("%s: could not read '@filters %s'; expected key=value pairs"
+                 % (where, text.strip()))
+    return out
+
+
+def _parse_plan_text(raw, path):
+    """Groups as `[Section]` headers, one query per line.
+
+        # comments and blank lines are ignored
+        @filters year_min=2020 human=true      <- applies to what follows
+
+        [Detection methods]
+        deepfake video detection generalization :: generalization
+        face forgery frequency artifacts
+
+    A `::` gives the query a short folder name; without one the folder is the
+    truncated query. A `@filters` line before any group applies to every group;
+    inside a group it applies to that group and overrides the global one.
+    """
+    groups, current, global_filters = [], None, {}
+
+    for lineno, line in enumerate(raw.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        where = "%s:%d" % (os.path.basename(path), lineno)
+
+        if line.startswith("[") and line.endswith("]"):
+            current = {"name": line[1:-1].strip() or "unnamed",
+                       "filters": {}, "queries": []}
+            groups.append(current)
+            continue
+
+        if line.lower().startswith("@filters"):
+            parsed = _parse_directive(line[len("@filters"):], where)
+            if current is None:
+                global_filters.update(parsed)
+            else:
+                current["filters"].update(parsed)
+            continue
+
+        query, _, short = line.partition("::")
+        query = query.strip()
+        if not query:
+            sys.exit("%s: a query is missing before '::'" % where)
+        if current is None:
+            current = {"name": "ungrouped", "filters": {}, "queries": []}
+            groups.append(current)
+        current["queries"].append(
+            {"query": query, "name": short.strip() or None, "filters": {}})
+
+    for group in groups:
+        merged = dict(global_filters)
+        merged.update(group["filters"])
+        group["filters"] = merged
+    return groups
+
+
+def _parse_plan_json(data, path):
+    """Same shape as the text format, for generated plans.
+
+        {"filters": {...},
+         "groups": [{"name": "...", "filters": {...},
+                     "queries": ["text", {"query": "...", "name": "...",
+                                          "filters": {...}}]}]}
+    """
+    where = os.path.basename(path)
+    global_filters = {k: _coerce_filter(k, str(v), where)
+                      for k, v in (data.get("filters") or {}).items()}
+    groups = []
+    for gi, raw_group in enumerate(data.get("groups") or [], 1):
+        filters = dict(global_filters)
+        filters.update({k: _coerce_filter(k, str(v), where)
+                        for k, v in (raw_group.get("filters") or {}).items()})
+        queries = []
+        for raw_query in raw_group.get("queries") or []:
+            if isinstance(raw_query, str):
+                queries.append({"query": raw_query, "name": None, "filters": {}})
+                continue
+            queries.append({
+                "query": raw_query["query"],
+                "name": raw_query.get("name"),
+                "filters": {k: _coerce_filter(k, str(v), where)
+                            for k, v in (raw_query.get("filters") or {}).items()},
+            })
+        groups.append({"name": raw_group.get("name") or "group %d" % gi,
+                       "filters": filters, "queries": queries})
+    return groups
+
+
+def parse_plan(path):
+    with open(path, encoding="utf-8") as fh:
+        raw = fh.read()
+    if path.lower().endswith(".json") or raw.lstrip().startswith("{"):
+        return _parse_plan_json(json.loads(raw), path)
+    return _parse_plan_text(raw, path)
 
 
 # -- rendering ------------------------------------------------------------
@@ -549,6 +734,258 @@ def cmd_fanout(client, args):
     print("\n" + audit_md, file=sys.stderr)
 
 
+def _filters_md(filters):
+    return ", ".join("`%s=%s`" % (k, v) for k, v in sorted(filters.items())) or "none"
+
+
+def _write(path, text):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def _dedup(papers):
+    """Merge a group's pages into one corpus, keeping which queries found what."""
+    merged = {}
+    for paper, query in papers:
+        key = (paper.get("doi") or paper.get("url") or paper.get("title", "")).lower()
+        if key in merged:
+            if query not in merged[key]["found_by"]:
+                merged[key]["found_by"].append(query)
+        else:
+            record = dict(paper)
+            record["found_by"] = [query]
+            merged[key] = record
+    return sorted(merged.values(),
+                  key=lambda p: (-len(p["found_by"]), -(p.get("citation_count") or 0)))
+
+
+def cmd_batch(client, args):
+    """Run a grouped plan of queries into a browsable folder tree.
+
+    One folder per query keeps each result set next to the exact query and filters
+    that produced it, which is what makes a review reproducible weeks later -- the
+    index and audit files alone can't tell you that, because they summarise.
+    """
+    groups = parse_plan(args.plan)
+    if not groups or not any(g["queries"] for g in groups):
+        sys.exit("no queries found in " + args.plan)
+
+    base_filters = collect_filters(args)
+    formats = [f.strip() for f in args.formats.split(",") if f.strip()]
+    unknown = [f for f in formats if f not in ("md", "json", "csv", "table")]
+    if unknown:
+        sys.exit("unknown --formats %s; choose from md, json, csv, table" % unknown)
+
+    # Lay the whole tree out before spending a call, so --dry-run can show it and a
+    # path that is too long for Windows surfaces now rather than 20 searches in.
+    jobs, long_paths = [], []
+    for gi, group in enumerate(groups, 1):
+        gdir = os.path.join(args.out, "%d.%s" % (gi, safe_name(group["name"],
+                                                              args.name_length)))
+        for qi, query in enumerate(group["queries"], 1):
+            label = query["name"] or query["query"]
+            leaf = os.path.join(gdir, "Q%d.%d-%s" % (
+                gi, qi, safe_name(label, args.name_length)))
+            filters = dict(base_filters)
+            filters.update(group["filters"])
+            filters.update(query["filters"])
+            jobs.append({"gi": gi, "qi": qi, "group": group, "gdir": gdir,
+                         "leaf": leaf, "query": query["query"], "filters": filters})
+            if len(os.path.abspath(leaf)) > MAX_PATH_HINT:
+                long_paths.append(leaf)
+
+    if long_paths:
+        print("warning: %d path(s) exceed %d characters and may fail on Windows "
+              "without long paths enabled. Shorten --name-length or --out, or give "
+              "queries short names with `::`." % (len(long_paths), MAX_PATH_HINT),
+              file=sys.stderr)
+
+    minutes = len(jobs) * client.min_interval / 60.0
+    if args.dry_run:
+        print("%s/" % args.out)
+        for gi, group in enumerate(groups, 1):
+            gjobs = [j for j in jobs if j["gi"] == gi]
+            print("  %s/   (%d quer%s, filters: %s)" % (
+                os.path.basename(gjobs[0]["gdir"]), len(gjobs),
+                "y" if len(gjobs) == 1 else "ies",
+                _filters_md(group["filters"]) if group["filters"] else "none"))
+            for job in gjobs:
+                print("    %s/" % os.path.basename(job["leaf"]))
+                print("      %s" % job["query"])
+        print("\n%d queries in %d groups | ~%d billed calls minimum | "
+              "~%.1f min at %.1fs spacing" % (
+                  len(jobs), len(groups), len(jobs), minutes, client.min_interval))
+        print("nothing was sent (--dry-run)")
+        return
+
+    client._log("%d queries in %d groups, ~%.1f min at %.1fs spacing -> %s"
+                % (len(jobs), len(groups), minutes, client.min_interval, args.out))
+
+    consecutive_failures = 0
+    for job in jobs:
+        tag = "Q%d.%d" % (job["gi"], job["qi"])
+        if args.resume and os.path.exists(os.path.join(job["leaf"], "meta.json")):
+            # Reload what the earlier run stored, so the group corpus and the index
+            # files this run rewrites still describe the whole plan. Skipping the
+            # call but dropping the records would quietly report the resumed
+            # queries as having found nothing.
+            job["skipped"] = True
+            stored = os.path.join(job["leaf"], "results.json")
+            try:
+                with open(stored, encoding="utf-8") as fh:
+                    job["papers"] = json.load(fh)
+                with open(os.path.join(job["leaf"], "meta.json"), encoding="utf-8") as fh:
+                    job["more"] = json.load(fh).get("more_available", False)
+                client._log("[%s] skipped, reusing %d stored results (--resume)"
+                            % (tag, len(job["papers"])))
+            except (OSError, ValueError):
+                job["papers"] = []
+                job["more"] = False
+                job["incomplete"] = True
+                client._log("[%s] skipped, but results.json is missing or unreadable "
+                            "-- this group's corpus will undercount. Rerun without "
+                            "--resume, or with --formats including json." % tag)
+            continue
+
+        client._log("[%s] %s" % (tag, job["query"]))
+        try:
+            if args.pages > 1:
+                page_size = job["filters"].get("page_size") or 20
+                papers = client.sweep(job["query"], max_results=args.pages * page_size,
+                                      **job["filters"])
+                body = {"page_size": page_size, "is_end": True}
+            else:
+                body = client.search(job["query"], **job["filters"])
+                papers = body.get("results", [])
+            consecutive_failures = 0
+        except ConsensusError as exc:
+            consecutive_failures += 1
+            client._log("  ! " + str(exc))
+            job["error"] = str(exc)
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                raise ConsensusError(
+                    "%d consecutive failures -- stopping with %d of %d queries done. "
+                    "Rerun with --resume to pick up where this left off."
+                    % (MAX_CONSECUTIVE_FAILURES,
+                       sum(1 for j in jobs if "papers" in j), len(jobs))) from None
+            continue
+
+        job["papers"] = papers
+        job["more"] = not body.get("is_end", True)
+        os.makedirs(job["leaf"], exist_ok=True)
+
+        header = "\n".join([
+            "# %s" % job["query"],
+            "",
+            "- Group: **%d. %s**" % (job["gi"], job["group"]["name"]),
+            "- Filters as sent: %s" % _filters_md(job["filters"]),
+            "- Retrieved: %s" % _now(),
+            "- Papers returned: **%d**%s" % (
+                len(papers),
+                "  (page filled -- more exist, and only these are citable)"
+                if job["more"] else ""),
+            "", "---", "",
+        ])
+        if "md" in formats:
+            _write(os.path.join(job["leaf"], "results.md"),
+                   header + (render_markdown(papers) or "_no results_") + "\n")
+        if "json" in formats:
+            _write(os.path.join(job["leaf"], "results.json"),
+                   json.dumps(papers, indent=2, ensure_ascii=False) + "\n")
+        if "csv" in formats:
+            _write(os.path.join(job["leaf"], "results.csv"), render_csv(papers))
+        if "table" in formats:
+            _write(os.path.join(job["leaf"], "results.txt"), render_table(papers))
+        _write(os.path.join(job["leaf"], "meta.json"), json.dumps({
+            "query": job["query"],
+            "group": {"number": job["gi"], "name": job["group"]["name"]},
+            "query_number": job["qi"],
+            "filters_as_sent": job["filters"],
+            "retrieved_at": _now(),
+            "returned": len(papers),
+            "more_available": job["more"],
+        }, indent=2, ensure_ascii=False, default=str) + "\n")
+        client._log("  -> %d results%s" % (len(papers), " (more exist)" if job["more"] else ""))
+
+    # Per-group index, with the within-group dedup a fan-out would have given you.
+    group_rows = []
+    for gi, group in enumerate(groups, 1):
+        gjobs = [j for j in jobs if j["gi"] == gi]
+        if not gjobs:
+            continue
+        gdir = gjobs[0]["gdir"]
+        os.makedirs(gdir, exist_ok=True)
+        flat = [(p, j["query"]) for j in gjobs for p in j.get("papers") or []]
+        corpus = _dedup(flat)
+        _write(os.path.join(gdir, "corpus.json"),
+               json.dumps(corpus, indent=2, ensure_ascii=False) + "\n")
+
+        lines = ["# %d. %s" % (gi, group["name"]), "",
+                 "Group filters: %s" % _filters_md(group["filters"]), "",
+                 "| Q | Query | Returned | Folder |",
+                 "| - | ----- | -------- | ------ |"]
+        for job in gjobs:
+            if job.get("error"):
+                state = "failed"
+            elif job.get("incomplete"):
+                state = "reused, records unreadable"
+            else:
+                state = str(len(job.get("papers") or []))
+                if job.get("skipped"):
+                    state += " (reused)"
+            lines += ["| Q%d.%d | %s | %s | `%s` |" % (
+                gi, job["qi"], job["query"], state, os.path.basename(job["leaf"]))]
+        lines += ["",
+                  "- Results before dedup: **%d**" % len(flat),
+                  "- Unique papers in this group: **%d**" % len(corpus),
+                  "- Full deduplicated corpus: `corpus.json` "
+                  "(each paper carries `found_by`)"]
+        repeats = [p for p in corpus if len(p["found_by"]) > 1]
+        if repeats:
+            lines += ["",
+                      "Papers found by more than one query in this group -- central to "
+                      "the group rather than to one phrasing:", ""]
+            for p in repeats[:10]:
+                lines.append("- (%d hits) [%s](%s)" % (
+                    len(p["found_by"]), p.get("title", "(untitled)"), _link(p)))
+        _write(os.path.join(gdir, "index.md"), "\n".join(lines) + "\n")
+        group_rows.append((gi, group, gjobs, len(flat), len(corpus),
+                           os.path.basename(gdir)))
+
+    done = [j for j in jobs if "papers" in j and not j.get("skipped")]
+    root_lines = ["# Search plan results", "",
+                  "- Plan: `%s`" % args.plan,
+                  "- Run: %s" % _now(),
+                  "- Base filters from the command line: %s" % _filters_md(base_filters),
+                  "- Pacing: one call every %.1fs" % client.min_interval, "",
+                  "| # | Group | Queries | Returned | Unique | Folder |",
+                  "| - | ----- | ------- | -------- | ------ | ------ |"]
+    for gi, group, gjobs, flat_n, uniq, folder in group_rows:
+        root_lines.append("| %d | %s | %d | %d | %d | `%s` |" % (
+            gi, group["name"], len(gjobs), flat_n, uniq, folder))
+    root_lines += ["",
+                   "- Queries in plan: **%d**" % len(jobs),
+                   "- Queries searched this run: **%d**" % len(done),
+                   "- Reused from a previous run (--resume): **%d**"
+                   % sum(1 for j in jobs if j.get("skipped")),
+                   "- Failed after retry: **%d**" % sum(1 for j in jobs if j.get("error")),
+                   "- Papers returned across all groups: **%d**"
+                   % sum(len(j.get("papers") or []) for j in jobs),
+                   "",
+                   "Dedup is per group, in each group's `corpus.json`. A paper can "
+                   "legitimately appear in several groups.", ""]
+    os.makedirs(args.out, exist_ok=True)
+    _write(os.path.join(args.out, "index.md"), "\n".join(root_lines))
+    _write(os.path.join(args.out, "audit.md"), render_audit(client.audit, {
+        "Queries in plan": len(jobs),
+        "Groups": len(group_rows),
+    }) + "\n")
+
+    print("\n".join(root_lines[-8:]))
+    print("\nwritten to %s (index.md, audit.md, one folder per group and query)"
+          % args.out)
+
+
 def cmd_ladder(client, args):
     """Gauge how each filter narrows the pool, one rung at a time.
 
@@ -644,7 +1081,42 @@ EPILOG = """examples:
   consensus.py ladder "resistance training older adults" --study-types rct --human
   consensus.py sweep "GLP-1 agonists weight loss" --page-size 100 --max 400 -o corpus.json
   consensus.py fanout -f queries.txt --human --year-min 2020 -o corpus.json --audit audit.md
+  consensus.py batch -f plan.txt -o searches --dry-run
+  consensus.py batch -f plan.txt -o searches --page-size 50 --full-text
   consensus.py diff -f topics.txt --state seen.json --year-min 2026 --month-min 8
+"""
+
+PLAN_FORMAT = """plan file format (text):
+
+  # comments and blank lines are ignored
+  @filters year_min=2020 human=true          <- applies to every group below
+
+  [Detection methods]
+  deepfake video detection generalization across datasets
+  face forgery detection frequency artifacts :: frequency artifacts
+
+  [Calibration]
+  @filters study_types=rct,meta-analysis     <- this group only, overrides global
+  uncertainty calibration under domain shift
+
+`::` gives a query a short folder name; without one the folder is the truncated
+query. A JSON plan works too: {"filters": {...}, "groups": [{"name": ...,
+"filters": {...}, "queries": ["text", {"query": ..., "name": ..., "filters": {...}}]}]}
+
+resulting tree:
+
+  searches/
+    index.md                 groups, counts, totals
+    audit.md                 every call, with filters as sent
+    1.Detection methods/
+      index.md               this group's queries and repeat-hit papers
+      corpus.json            deduplicated across the group, each paper has found_by
+      Q1.1-deepfake video detection generalization across/
+        results.md  results.json  meta.json
+      Q1.2-frequency artifacts/
+        results.md  results.json  meta.json
+    2.Calibration/
+      ...
 """
 
 
@@ -690,6 +1162,28 @@ def build_parser():
     fo.add_argument("--audit", help="write the audit log here as markdown")
     add_filter_args(fo)
     fo.set_defaults(func=cmd_fanout)
+
+    ba = sub.add_parser(
+        "batch", help="run a grouped query plan into a folder tree",
+        description="Run a plan of queries, grouped by topic, into one folder per "
+                    "query under --out, paced at the default interval.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=PLAN_FORMAT)
+    ba.add_argument("-f", "--plan", required=True,
+                    help="plan file: [Group] sections with one query per line, or JSON")
+    ba.add_argument("-o", "--out", required=True,
+                    help="root folder; groups are created inside it")
+    ba.add_argument("--formats", default="md,json",
+                    help="per-query result files: md, json, csv, table (default md,json)")
+    ba.add_argument("--pages", type=int, default=1, help="pages per query (default 1)")
+    ba.add_argument("--name-length", type=int, default=50,
+                    help="truncate folder names to this many characters (default 50)")
+    ba.add_argument("--resume", action="store_true",
+                    help="skip queries whose folder already holds results")
+    ba.add_argument("--dry-run", action="store_true",
+                    help="print the folder tree and cost estimate without searching")
+    add_filter_args(ba)
+    ba.set_defaults(func=cmd_batch)
 
     la = sub.add_parser("ladder", help="show how each filter narrows the pool")
     la.add_argument("query")

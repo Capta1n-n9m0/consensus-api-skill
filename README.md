@@ -41,6 +41,7 @@ python consensus.py search "does creatine improve working memory" --full-text
 python consensus.py ladder "resistance training older adults" --study-types rct --human
 python consensus.py sweep "GLP-1 agonists weight loss" --page-size 300 -o corpus.json
 python consensus.py fanout -f queries.txt --year-min 2020 -o corpus.json --audit audit.md
+python consensus.py batch -f plan.txt -o searches --dry-run
 python consensus.py diff -f topics.txt --state seen.json --year-min 2026 --month-min 8
 ```
 
@@ -51,11 +52,52 @@ python consensus.py diff -f topics.txt --state seen.json --year-min 2026 --month
 | `ladder` | Re-run adding one filter at a time, with counts per rung       |
 | `sweep`  | Paginate one query to exhaustion                               |
 | `fanout` | Many queries, paced and merged, deduplicated on DOI            |
+| `batch`  | A topic-grouped query plan into a folder tree on disk          |
 | `diff`   | Report only papers absent from a stored state file             |
 
 All commands share the same filters (`--year-min`, `--study-types`, `--human`, `--sjr-max`,
 `--open-access`, `--domain`, `--medical-mode`, …) and the same `--format` choices.
 `--help` on any command lists them.
+
+### Batch: a grouped plan into a folder tree
+
+`batch` takes queries grouped by topic and writes one folder per query, so results stay
+next to the exact query and filters that produced them:
+
+```
+# plan.txt
+@filters year_min=2020                      <- applies to every group below
+
+[Generalization]
+deepfake video detection generalization across datasets
+cross-manipulation generalization face forgery detection :: cross-manipulation
+
+[Calibration]
+@filters study_types=rct,meta-analysis      <- this group only
+uncertainty calibration deep learning domain shift
+```
+
+```
+searches/
+  index.md                     groups, counts, totals
+  audit.md                     every call, with filters as sent
+  1.Generalization/
+    index.md                   the group's queries and its repeat-hit papers
+    corpus.json                deduplicated across the group, each paper has found_by
+    Q1.1-deepfake video detection generalization across/
+      results.md  results.json  meta.json
+    Q1.2-cross-manipulation/
+      results.md  results.json  meta.json
+  2.Calibration/
+    ...
+```
+
+`::` gives a query a short folder name; otherwise the folder is the truncated query.
+A JSON plan works too, with per-group and per-query filter overrides.
+
+`--dry-run` prints the tree and the call estimate without sending anything, and validates
+every filter at its line number. `--resume` reuses results already on disk instead of
+re-spending those calls — the way to recover from an interrupted run.
 
 ## What the client handles for you
 
@@ -78,6 +120,7 @@ consensus.py                  the CLI (stdlib only)
 references/api-reference.md   every parameter, response field, error and plan limit
 references/recipes.md         worked workflows: reviews, screening, extraction, monitoring
 examples/queries.txt          a fan-out query file to copy
+examples/plan.txt             a grouped batch plan to copy
 ```
 
 ## License

@@ -54,7 +54,19 @@ Extra budget buys *deeper analysis*, not more of the same. Review-article search
 (`systematic review <topic>`, `meta-analysis <topic>`) are disproportionately valuable —
 one good review pre-digests dozens of primary studies.
 
-**Phase 4 — execute.**
+**Phase 4 — execute.** For a review of any size, group the plan by sub-area and use
+`batch` rather than `fanout`: the per-query folders keep each result set beside the query
+and filters that produced it, which is what you need when writing up the search strategy
+weeks later, and `--resume` means an interruption costs no calls.
+
+```bash
+python consensus.py batch -f review-plan.txt -o searches --dry-run   # verify the tree
+python consensus.py batch -f review-plan.txt -o searches --page-size 50
+```
+
+Each sub-area becomes a group, so its `corpus.json` is already deduplicated across that
+sub-area's phrasings and its `index.md` lists the repeat-hit papers. Use `fanout` instead
+when you only need one merged corpus to answer a question now:
 
 ```bash
 python consensus.py fanout -f review-queries.txt \
@@ -286,6 +298,9 @@ Every recipe above composes these. When none of the recipes fits, compose your o
 | **Exhaustive sweep**         | Every record, not the first page                 | `sweep`; walks `next_page` to the 1,000-result ceiling                       |
 | **Excerpt-first extraction** | Numbers you can defend                           | `--full-text` with the query phrased as the thing extracted                  |
 | **Diff against last run**    | Turns any search into a monitor                  | `diff`; windows by year/month, diffs on `doi`                                |
+
+`batch` is fan-out with the results written out per query instead of merged — reach for it
+whenever the corpus has to outlive the run, and for anything you may need to resume.
 
 The filter ladder is the highest-leverage habit of the five. Most disappointing Consensus
 results are an unfiltered query, and most empty ones are four filters applied at once. Move
