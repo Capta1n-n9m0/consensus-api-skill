@@ -65,11 +65,13 @@ rungs and prints the count at each, so when the pool collapses you know *which* 
 did it. Say which rung was binding rather than reporting "little evidence exists" — those
 are very different claims, and only one of them is usually true.
 
-**Pace the calls; the limit is one request per second.** `consensus.py` already sleeps
-between calls, so let it run rather than launching parallel processes — unbounded
-parallelism produces 429s, not speed. Note the two 429s mean opposite things: *too fast*
-is worth retrying, *monthly allowance used up* is not, and the client distinguishes them
-for you.
+**Pace the calls.** The API allows one request per second; `consensus.py` deliberately
+sends one every three, because the quota is per account and shared with MCP, so crowding
+the ceiling collides with anything else signed in. Let it run rather than launching
+parallel processes — unbounded parallelism produces 429s, not speed, and a 20-query
+fan-out takes about a minute either way. `--min-interval` overrides it if you ever need
+to. Note the two 429s mean opposite things: *too fast* is worth retrying, *monthly
+allowance used up* is not, and the client distinguishes them for you.
 
 **Respect the two ceilings, and tell the reader when you hit one.** `page_size` is capped
 by plan (20 Free / 300 Pro and Teams / 750 Deep / 1,000 Enterprise), and separately any

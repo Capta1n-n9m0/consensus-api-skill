@@ -27,9 +27,13 @@ from datetime import datetime, timezone
 BASE_URL = "https://api.consensus.app/v1/search"
 RESULT_CEILING = 1000  # (page + 1) * page_size may not exceed this, on any plan
 
-# Pacing: every self-serve plan allows one request per second. Going faster buys
-# 429s, not speed, so the client paces itself rather than trusting the caller.
-MIN_INTERVAL = 1.1
+# Pacing: every self-serve plan allows one request per second, and going faster buys
+# 429s rather than speed, so the client paces itself rather than trusting the caller.
+# The default sits well back from the limit at one call every 3 seconds: the quota is
+# per account and shared with MCP, so anything else signed in on the same account is
+# spending from the same budget, and a fan-out that crowds the ceiling collides with it.
+# A 20-query fan-out costs a minute either way -- retries would cost more.
+MIN_INTERVAL = 3.0
 RETRY_WAIT = 3.0
 MAX_CONSECUTIVE_FAILURES = 3
 
@@ -653,7 +657,8 @@ def build_parser():
     )
     p.add_argument("--api-key", default=os.environ.get("CONSENSUS_API_KEY", ""))
     p.add_argument("--min-interval", type=float, default=MIN_INTERVAL,
-                   help="seconds between calls (default 1.1; the limit is 1/sec)")
+                   help="seconds between calls (default 3.0; the API limit is 1/sec, "
+                        "so this leaves headroom for other clients on the same account)")
     p.add_argument("-q", "--quiet", action="store_true",
                    help="suppress progress output on stderr")
     p.add_argument("--list-study-types", action="store_true",

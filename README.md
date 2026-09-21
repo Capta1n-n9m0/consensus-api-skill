@@ -59,8 +59,8 @@ All commands share the same filters (`--year-min`, `--study-types`, `--human`, `
 
 ## What the client handles for you
 
-- **Pacing** — one request per second, the limit on every self-serve plan. Sleeps between
-  calls so a fan-out doesn't collect 429s.
+- **Pacing** — one call every 3 seconds by default, well back from the 1 req/sec limit,
+  since the quota is per account and shared with MCP. `--min-interval` overrides it.
 - **The two 429s** — "too fast" is retried; "monthly allowance used up" is not, because
   retrying that one only wastes time.
 - **Retries** — 3s wait, one retry, then a loud failure. Three consecutive failures abort
