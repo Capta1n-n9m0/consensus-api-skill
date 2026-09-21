@@ -662,7 +662,9 @@ def add_filter_args(p):
                    help="default 20, clamped to your plan cap (check the echoed value)")
     o.add_argument("--full-text", dest="include_full_text_chunks",
                    action="store_true", default=None,
-                   help="query-relevant excerpts; paid plans, open-access papers")
+                   help="query-relevant excerpts; paid plans, open-access papers. "
+                        "The budget is 60 per request whatever the page size, so keep "
+                        "--page-size near 20 when the passages are the point")
     o.add_argument("--semantic-score", dest="include_semantic_score",
                    action="store_true", default=None,
                    help="relevance score, top 50 results only")

@@ -131,12 +131,36 @@ citation count: a 2023 paper with 150 citations is a much stronger signal than a
 with the same number. And **repeat hits across a fan-out** (`found_by`) identify the papers
 foundational to the whole field rather than to one phrasing of it.
 
-For numbers, doses, and measured values, add `--full-text` — each eligible paper then
-carries up to three passages from its body chosen against your query, formatted
-`Section: <heading> | <passage>`. Excerpts need an open-access PDF and a paid plan, so pair
-them with `--open-access` when the passages matter more than coverage, and phrase the query
-as the thing you want to extract: "what dose of creatine improves working memory" returns
-dosing passages where "creatine" returns general ones. Keep each excerpt with its `doi`.
+## Full text
+
+Full text does two different jobs, and only one of them is opt-in. **Retrieval** always
+searches it where available, on every request and every plan — which is why a paper can
+rank on what's in its methods rather than its abstract. **Excerpts** are the opt-in part:
+`--full-text` makes each eligible paper carry up to three passages from its body, chosen
+against your query and formatted `Section: <heading> | <passage>`.
+
+Excerpts need a paid plan and an open-access PDF, so pair `--full-text` with
+`--open-access` when the passages matter more than coverage. Retracted papers never carry
+them, and Consensus's paywalled publisher-partner text powers the app rather than the API.
+
+**Phrase the query as the thing you want to extract.** Excerpts are selected against the
+query, so "what dose of creatine improves working memory" returns dosing passages where
+"creatine" returns general ones. This is the single biggest lever on excerpt quality.
+
+**Keep the page small when excerpts are the point.** The budget is 60 excerpts per
+*request*, whatever the page size, so beyond about 20 papers you can no longer get three
+each. Measured on one query: a 20-paper page covered 17 of 20 papers, while a 40-paper page
+hit the 60 cap and covered only 24 of 40. Coverage follows passage relevance rather than
+result order, so on a big page the gaps land unpredictably — the paper you most wanted may
+be one of them. Use ~20 and paginate for extraction; a big page is fine when excerpts are
+a bonus on top of a sweep.
+
+**When a paper has no excerpt, fall back to `abstract` and `takeaway` — and say that you
+did.** The field is absent from the JSON rather than null, so read it with `.get()`. An
+answer built on abstracts and an answer built on methods sections deserve different
+confidence, and the reader can only tell if you mark which is which. Store the `doi` and
+`url` alongside every passage so anything built on it stays citable, and for high-stakes
+work follow `url` and read the paper — excerpts are passages, not papers.
 
 ## Going further
 

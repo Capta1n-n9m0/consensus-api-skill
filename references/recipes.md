@@ -165,13 +165,20 @@ Numbers, doses, formulas and parameters with their measurement conditions attach
 
 ```bash
 python consensus.py search "what dose of creatine improves working memory" \
-  --full-text --open-access --page-size 50 --format md -o excerpts.md
+  --full-text --open-access --page-size 20 --format md -o excerpts.md
 ```
 
 Phrase the query as *the thing being extracted*, not the topic — excerpts are selected
 against the query, so "what dose of X improves Y" returns dosing passages where "X" returns
 general ones. `--open-access` trades coverage for excerpt availability, which is the right
 trade when the passages are the point.
+
+Keep `--page-size` near 20 here and paginate for more, rather than asking for one big page.
+The excerpt budget is 60 per request regardless of page size, so a 40-paper page spreads the
+same 60 passages across twice the papers and leaves more than a third of them with none —
+and because coverage follows passage relevance rather than result order, the papers left
+empty are not the ones you would have chosen to drop. For a sweep with more than ~20 papers,
+run the sweep for the corpus and then re-query the papers you actually want to extract from.
 
 Extract into a table with one row per value and these columns: value, units, the conditions
 it was measured under, the `doi`, and the excerpt it came from. A number without its

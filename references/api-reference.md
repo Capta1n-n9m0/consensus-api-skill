@@ -188,6 +188,16 @@ Every plan can use every search filter — quality comes from filters, which cos
 
 Verified against the live endpoint, and not all of it is in the published docs:
 
+- **The 60-excerpt budget is per request, so page size decides excerpt density.**
+  Measured on one query with `open_access=true`: `page_size=20` returned 50 excerpts
+  covering 17 of 20 papers (85%), while `page_size=40` returned exactly 60 — the cap —
+  covering 24 of 40 (60%). Two separate limits are at work: the hard 60 per request,
+  and per-paper relevance, since a paper with no passage matching your query gets none
+  at any page size. So a big page maximises *total* passages and a page of about 20
+  maximises the *proportion of papers* that carry them. For extraction, prefer ~20 and
+  paginate; for a broad sweep where excerpts are a bonus, a big page is fine. Note the
+  papers left without excerpts are not the lowest-ranked ones — coverage follows passage
+  relevance, not result order, so a large page leaves gaps unpredictably.
 - **`study_types` must be a repeated parameter, not a comma-joined value.**
   `?study_types=rct&study_types=meta-analysis` works;
   `?study_types=rct,meta-analysis` returns `422` with
