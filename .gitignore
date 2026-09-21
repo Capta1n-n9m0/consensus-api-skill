@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+corpus.json
+audit.md
+seen.json
+*.csv

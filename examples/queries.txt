@@ -1,0 +1,15 @@
+# One query per line. Blank lines and # comments are ignored.
+# Aim for 5-30 covering: mechanism, population, outcome, competing explanations,
+# plus review articles and the terminology the field used a decade ago.
+
+# --- sub-area searches
+resistance training older adults muscle strength
+progressive overload sarcopenia intervention
+protein supplementation combined with resistance training elderly
+
+# --- review articles (one good review pre-digests dozens of primary studies)
+systematic review resistance training sarcopenia
+meta-analysis strength training older adults functional outcomes
+
+# --- historical terminology (run these with --year-max 2015)
+weight lifting elderly frailty
