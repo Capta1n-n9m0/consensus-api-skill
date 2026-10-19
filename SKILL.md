@@ -10,11 +10,12 @@ papers, wrapped in `consensus.py` next to this file. Retrieval runs against titl
 abstracts, and full text where available, so a paper can surface on what's in its methods
 section rather than only its abstract.
 
-```
-python "%USERPROFILE%\.claude\skills\consensus-api\consensus.py" <command> ...
+```bash
+python ~/.claude/skills/consensus-api/consensus.py <command> ...                  # macOS, Linux, Git Bash
+python "%USERPROFILE%\.claude\skills\consensus-api\consensus.py" <command> ...    # Windows cmd
 ```
 
-In Git Bash: `python ~/.claude/skills/consensus-api/consensus.py ...`. Authentication is
+Use `python3` where `python` isn't on the path. Authentication is
 `CONSENSUS_API_KEY` in the environment; pass `--api-key` to override. Keys are created and
 revoked at [consensus.app/api-mcp](https://consensus.app/api-mcp/) under **Keys and clients**.
 

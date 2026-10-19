@@ -11,7 +11,13 @@ makes coverage reportable.
 ## Install
 
 ```bash
-git clone git@github.com:Capta1n-n9m0/consensus-api-skill.git ~/.claude/skills/consensus-api
+# macOS / Linux / Git Bash
+git clone https://github.com/Capta1n-n9m0/consensus-api-skill.git ~/.claude/skills/consensus-api
+```
+
+```powershell
+# Windows PowerShell
+git clone https://github.com/Capta1n-n9m0/consensus-api-skill.git "$env:USERPROFILE\.claude\skills\consensus-api"
 ```
 
 Create a key at [consensus.app/api-mcp](https://consensus.app/api-mcp/) → **Keys and
